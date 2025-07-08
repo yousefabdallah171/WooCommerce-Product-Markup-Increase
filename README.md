@@ -1,4 +1,4 @@
-# 🚀 WooCommerce Product Markup Plugin
+#  WooCommerce Product Markup Plugin
 
 ![WooCommerce](https://img.shields.io/badge/WooCommerce-Compatible-purple?logo=woocommerce) ![Version](https://img.shields.io/badge/version-1.0.0-blue) ![License](https://img.shields.io/badge/license-GPLv2%2B-green)
 
@@ -12,7 +12,7 @@
 
 ---
 
-## 🎯 Features
+## Features
 
 - 💸 **Add Fixed or Percentage Markup** to all WooCommerce products
 - ⚡ **Instantly applies** markup to all products (no manual editing!)
