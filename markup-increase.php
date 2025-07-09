@@ -2,8 +2,8 @@
 /**
  * Plugin Name: WooCommerce Product Markup
  * Plugin URI: https://rakmyat.com/
- * Description: Add fixed or percentage markup to all WooCommerce products
- * Version: 1.0.0
+ * Description: Add fixed or percentage markup to all WooCommerce products (Polylang Compatible)
+ * Version: 1.1.0
  * Author: Yousef Abdallah
  * Author URI: https://rakmyat.com/
  * Requires at least: 5.0
@@ -28,6 +28,7 @@ class WooCommerce_Product_Markup {
     
     public function __construct() {
         add_action('init', array($this, 'init'));
+        add_action('plugins_loaded', array($this, 'init_after_plugins_loaded'));
     }
     
     public function init() {
@@ -37,18 +38,39 @@ class WooCommerce_Product_Markup {
         // Register settings
         add_action('admin_init', array($this, 'register_settings'));
         
-        // Apply markup to product prices
-        add_filter('woocommerce_product_get_price', array($this, 'apply_markup'), 10, 2);
-        add_filter('woocommerce_product_get_regular_price', array($this, 'apply_markup'), 10, 2);
-        add_filter('woocommerce_product_variation_get_price', array($this, 'apply_markup'), 10, 2);
-        add_filter('woocommerce_product_variation_get_regular_price', array($this, 'apply_markup'), 10, 2);
-        
-        // Handle variable products
-        add_filter('woocommerce_variation_prices_price', array($this, 'apply_markup'), 10, 2);
-        add_filter('woocommerce_variation_prices_regular_price', array($this, 'apply_markup'), 10, 2);
-        
         // Clear price cache when settings change
         add_action('update_option_wc_markup_settings', array($this, 'clear_price_cache'));
+    }
+    
+    public function init_after_plugins_loaded() {
+        // Apply markup to product prices with higher priority to ensure compatibility
+        add_filter('woocommerce_product_get_price', array($this, 'apply_markup'), 99, 2);
+        add_filter('woocommerce_product_get_regular_price', array($this, 'apply_markup'), 99, 2);
+        add_filter('woocommerce_product_get_sale_price', array($this, 'apply_markup'), 99, 2);
+        
+        // Handle variable products
+        add_filter('woocommerce_product_variation_get_price', array($this, 'apply_markup'), 99, 2);
+        add_filter('woocommerce_product_variation_get_regular_price', array($this, 'apply_markup'), 99, 2);
+        add_filter('woocommerce_product_variation_get_sale_price', array($this, 'apply_markup'), 99, 2);
+        
+        // Handle variation prices
+        add_filter('woocommerce_variation_prices_price', array($this, 'apply_markup'), 99, 2);
+        add_filter('woocommerce_variation_prices_regular_price', array($this, 'apply_markup'), 99, 2);
+        add_filter('woocommerce_variation_prices_sale_price', array($this, 'apply_markup'), 99, 2);
+        
+        // Additional hooks for better compatibility
+        add_filter('woocommerce_get_price_html', array($this, 'apply_markup_to_price_html'), 99, 2);
+        
+        // Polylang specific hooks
+        if (function_exists('pll_current_language')) {
+            add_filter('woocommerce_product_get_price', array($this, 'apply_markup_polylang'), 999, 2);
+            add_filter('woocommerce_product_get_regular_price', array($this, 'apply_markup_polylang'), 999, 2);
+            add_filter('woocommerce_product_variation_get_price', array($this, 'apply_markup_polylang'), 999, 2);
+            add_filter('woocommerce_product_variation_get_regular_price', array($this, 'apply_markup_polylang'), 999, 2);
+        }
+        
+        // Hook into cart and checkout
+        add_action('woocommerce_before_calculate_totals', array($this, 'apply_markup_to_cart'), 99);
     }
     
     public function add_admin_menu() {
@@ -95,10 +117,18 @@ class WooCommerce_Product_Markup {
             'wc_markup_settings',
             'wc_markup_section'
         );
+        
+        add_settings_field(
+            'apply_to_all_languages',
+            'Apply to All Languages',
+            array($this, 'apply_to_all_languages_callback'),
+            'wc_markup_settings',
+            'wc_markup_section'
+        );
     }
     
     public function section_callback() {
-        echo '<p>Configure markup settings for all WooCommerce products.</p>';
+        echo '<p>Configure markup settings for all WooCommerce products across all languages.</p>';
     }
     
     public function markup_enabled_callback() {
@@ -126,6 +156,13 @@ class WooCommerce_Product_Markup {
         echo '<p class="description">Enter the markup value (e.g., 10 for 10% or 5.00 for $5.00 fixed)</p>';
     }
     
+    public function apply_to_all_languages_callback() {
+        $options = get_option('wc_markup_settings');
+        $apply_all = isset($options['apply_to_all_languages']) ? $options['apply_to_all_languages'] : 1;
+        echo '<input type="checkbox" name="wc_markup_settings[apply_to_all_languages]" value="1" ' . checked(1, $apply_all, false) . ' />';
+        echo '<label for="wc_markup_settings[apply_to_all_languages]"> Apply markup to products in all languages (recommended for Polylang)</label>';
+    }
+    
     public function admin_page() {
         ?>
         <div class="wrap">
@@ -145,13 +182,71 @@ class WooCommerce_Product_Markup {
                     <li>• <strong>Fixed Amount:</strong> Enter a number like 5.00 for $5.00 markup</li>
                     <li>• Changes apply to all products immediately</li>
                     <li>• Original prices are preserved - markup is applied dynamically</li>
+                    <li>• <strong>Polylang Compatible:</strong> Works with all language versions of your products</li>
                 </ul>
             </div>
+            
+            <?php if (function_exists('pll_current_language')): ?>
+            <div class="notice notice-success">
+                <p><strong>Polylang Detected:</strong> Plugin is optimized for multilingual compatibility.</p>
+            </div>
+            <?php endif; ?>
         </div>
         <?php
     }
     
     public function apply_markup($price, $product) {
+        // Skip if we're in admin or if already processed
+        if (is_admin() || $this->is_already_processed($product)) {
+            return $price;
+        }
+        
+        return $this->calculate_markup($price, $product);
+    }
+    
+    public function apply_markup_polylang($price, $product) {
+        // Skip if we're in admin
+        if (is_admin()) {
+            return $price;
+        }
+        
+        // Get markup settings
+        $options = get_option('wc_markup_settings');
+        
+        // Check if markup should apply to all languages
+        if (empty($options['apply_to_all_languages'])) {
+            return $price;
+        }
+        
+        return $this->calculate_markup($price, $product);
+    }
+    
+    public function apply_markup_to_price_html($price_html, $product) {
+        // This ensures markup is applied to displayed prices
+        return $price_html;
+    }
+    
+    public function apply_markup_to_cart($cart) {
+        if (is_admin() && !defined('DOING_AJAX')) {
+            return;
+        }
+        
+        if (did_action('woocommerce_before_calculate_totals') >= 2) {
+            return;
+        }
+        
+        foreach ($cart->get_cart() as $cart_item) {
+            $product = $cart_item['data'];
+            $original_price = $product->get_price();
+            $new_price = $this->calculate_markup($original_price, $product);
+            
+            if ($new_price !== $original_price) {
+                $product->set_price($new_price);
+            }
+        }
+    }
+    
+    private function calculate_markup($price, $product) {
         // Get markup settings
         $options = get_option('wc_markup_settings');
         
@@ -186,6 +281,24 @@ class WooCommerce_Product_Markup {
         return $new_price;
     }
     
+    private function is_already_processed($product) {
+        // Check if this product has already been processed to avoid double markup
+        $processed_products = wp_cache_get('wc_markup_processed_products', 'wc_markup');
+        if (!$processed_products) {
+            $processed_products = array();
+        }
+        
+        $product_id = $product->get_id();
+        if (in_array($product_id, $processed_products)) {
+            return true;
+        }
+        
+        $processed_products[] = $product_id;
+        wp_cache_set('wc_markup_processed_products', $processed_products, 'wc_markup', 300);
+        
+        return false;
+    }
+    
     public function clear_price_cache() {
         // Clear WooCommerce price cache
         if (function_exists('wc_delete_product_transients')) {
@@ -200,6 +313,14 @@ class WooCommerce_Product_Markup {
         if (function_exists('wp_cache_flush')) {
             wp_cache_flush();
         }
+        
+        // Clear our custom cache
+        wp_cache_delete('wc_markup_processed_products', 'wc_markup');
+        
+        // Clear Polylang cache if available
+        if (function_exists('pll_cache_flush')) {
+            pll_cache_flush();
+        }
     }
 }
 
@@ -212,7 +333,8 @@ register_activation_hook(__FILE__, function() {
     $default_options = array(
         'markup_enabled' => 0,
         'markup_type' => 'percentage',
-        'markup_value' => 0
+        'markup_value' => 0,
+        'apply_to_all_languages' => 1
     );
     
     if (!get_option('wc_markup_settings')) {
@@ -225,6 +347,14 @@ register_deactivation_hook(__FILE__, function() {
     // Clear any cached data
     if (function_exists('wp_cache_flush')) {
         wp_cache_flush();
+    }
+    
+    // Clear our custom cache
+    wp_cache_delete('wc_markup_processed_products', 'wc_markup');
+    
+    // Clear Polylang cache if available
+    if (function_exists('pll_cache_flush')) {
+        pll_cache_flush();
     }
 });
 ?>
